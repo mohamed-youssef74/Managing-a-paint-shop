@@ -5,7 +5,7 @@ import './globals.css'
 export const metadata: Metadata = {
   title: 'السيد سعد | إدارة محل الدهانات',
   description: 'لوحة تحكم محل السيد سعد لإدارة المبيعات والمخزون والعملاء والموردين',
-  generator: 'v0.app',
+  generator: 'm.youssef74',
   icons: {
     icon: [
       {
