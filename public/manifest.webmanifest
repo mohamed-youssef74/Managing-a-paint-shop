@@ -1,0 +1,15 @@
+{
+  "name": "السيد سعد | إدارة محل الدهانات",
+  "short_name": "السيد سعد",
+  "description": "إدارة المبيعات والمخزون والعملاء والموردين بدون إنترنت",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f6f8fb",
+  "theme_color": "#173b63",
+  "lang": "ar",
+  "dir": "rtl",
+  "icons": [
+    { "src": "/icon-light-32x32.png", "sizes": "32x32", "type": "image/png" },
+    { "src": "/apple-icon.png", "sizes": "180x180", "type": "image/png" }
+  ]
+}
