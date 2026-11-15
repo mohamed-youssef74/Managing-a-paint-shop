@@ -237,7 +237,7 @@ export default function Page() {
       try {
         const backup = JSON.parse(String(reader.result))
         if (!Array.isArray(backup.products) || !Array.isArray(backup.sales) || !Array.isArray(backup.customers)) throw new Error('invalid backup')
-        if (!window.confirm('سيتم استبدال البيانات الحالية بب��انات النسخة الاحتياطية. هل تريد المتابعة؟')) return
+        if (!window.confirm('سيتم استبدال البيانات الحالية بيانات النسخة الاحتياطية. هل تريد المتابعة؟')) return
         setProducts(backup.products)
         setSales(backup.sales)
         setCustomers(backup.customers)
