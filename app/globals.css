@@ -54,3 +54,54 @@ button { cursor: pointer; }
   }
   @media (max-width: 900px) { .sidebar { width: 210px; flex-basis: 210px; }.main-content { padding: 0 24px 40px; }.stat-grid { grid-template-columns: repeat(2, 1fr); }.content-grid { grid-template-columns: 1fr; } }
 @media (max-width: 620px) { .sidebar { display: none; }.mobile-nav { display: flex; gap: 6px; overflow-x: auto; padding: 9px 0; border-bottom: 1px solid var(--border); scrollbar-width: none; }.mobile-nav::-webkit-scrollbar { display: none; }.mobile-nav-item { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; border: 0; border-radius: 7px; padding: 8px 10px; background: transparent; color: #77828e; font-size: 10px; white-space: nowrap; }.mobile-nav-item.active { background: var(--coral-light); color: var(--coral); font-weight: bold; }.main-content { padding: 0 15px 30px; width: 100%; }.topbar { height: 59px; justify-content: space-between; }.mobile-brand { display: flex; align-items: center; gap: 7px; color: var(--coral); font-weight: bold; }.page-heading { padding: 25px 0 22px; display: block; }.page-heading h1 { font-size: 23px; line-height: 1.35; }.subheading { line-height: 1.7; }.heading-actions { margin-top: 18px; }.heading-actions .outline-button { display: none; }.heading-actions .primary-button { width: 100%; justify-content: center; }.stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }.stat-card { padding: 13px; min-height: 125px; }.stat-card p { max-width: 80%; line-height: 1.5; }.stat-icon { left: 13px; top: 13px; }.stat-value strong { font-size: 21px; }.panel { padding: 16px 14px; border-radius: 9px; }.panel-header { align-items: flex-start; }.panel-header h2 { line-height: 1.5; }.chart-panel { overflow: hidden; }.chart { min-width: 390px; }.inventory-view .panel-header, .report-panel .panel-header { display: block; }.table-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }.table-wrap table { min-width: 760px; }.table-search { margin-top: 13px; width: 100%; }.search-box { margin-top: 15px; }.search-box input { width: 100%; }.form-row { grid-template-columns: 1fr !important; gap: 10px; }.purchase-invoice-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }.period-report-grid, .reports-grid { grid-template-columns: 1fr; }.report-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }.supplier-panels { grid-template-columns: 1fr !important; }.invoice-modal-actions { flex-wrap: wrap; }.invoice-modal-actions button { flex: 1 1 140px; justify-content: center; }.invoice-head { gap: 12px; flex-direction: column; }.invoice-line { min-width: 520px; }.invoice-lines { overflow-x: auto; }.modal-backdrop { padding: 8px; }.modal, .invoice-preview { width: 100%; max-width: none; max-height: calc(100vh - 16px); }.close-button { top: 10px; left: 10px; }.row-actions { gap: 4px; } }
+
+.customer-statement .statement-invoice { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; background: #fff; }
+.customer-statement .statement-invoice-head { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; padding-bottom: 6px; }
+.customer-statement .statement-invoice-head span { color: var(--muted); font-size: 10px; }
+.customer-statement .statement-invoice-totals { display: flex; flex-wrap: wrap; gap: 6px 16px; justify-content: flex-start; padding-top: 10px; font-size: 11px; color: var(--muted); }
+.customer-statement .statement-invoice-totals strong { color: var(--coral); font-size: 13px; }
+.customer-statement .invoice-due { color: #b3261e; font-weight: 700; }
+.customer-statement .invoice-paid { color: #1d7a46; font-weight: 700; }
+@media print { .customer-statement .statement-invoice { break-inside: avoid; border-color: #dfe2e4; } }
+@media (max-width: 620px) { .customer-statement .invoice-line { min-width: 0; grid-template-columns: minmax(0, 1.5fr) .4fr .8fr .9fr; gap: 4px; font-size: 10px; } .customer-statement .invoice-lines { overflow-x: visible; } }
+@media print { .customer-statement .invoice-modal-actions, .customer-statement .payment-form { display: none !important; } .customer-statement .statement-invoice-totals .invoice-due, .customer-statement .statement-invoice-totals .invoice-paid { border: 0 !important; padding: 0 !important; background: none !important; } }
+
+.nav-item { position: relative; }
+.nav-count { margin-inline-start: auto; background: #ef6f5b; color: #fff; border-radius: 999px; min-width: 20px; padding: 1px 6px; font-size: 10px; text-align: center; }
+.collection-alerts .alert-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.collection-alerts .alert-tabs button { border: 1px solid var(--border); background: #fff; border-radius: 7px; padding: 8px 10px; font: inherit; font-size: 11px; cursor: pointer; }
+.collection-alerts .alert-tabs button.active { background: var(--coral-light); border-color: var(--coral); color: var(--coral); font-weight: 700; }
+.collection-alerts .alert-note { margin: 4px 0 12px; padding: 9px 11px; background: #faf9f6; border: 1px dashed var(--border); border-radius: 8px; color: var(--muted); font-size: 11px; }
+.collection-alerts td small { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; }
+
+.customer-statement .statement-discount { display: flex; justify-content: space-between; padding: 9px 0 2px; font-size: 11px; color: var(--muted); }
+.customer-statement .statement-discount strong { color: var(--ink); }
+
+.collection-alerts .badge:not(.warning):not(.good) { background: #eef0f2; color: #4d5964; }
+@media print {
+  .modal-backdrop { display: block !important; position: static !important; padding: 0 !important; overflow: visible !important; }
+  .customer-statement { width: 100% !important; max-width: none !important; max-height: none !important; overflow: visible !important; margin: 0 !important; }
+  .customer-statement .invoice-summary { grid-template-columns: repeat(3, 1fr); }
+  .customer-statement .invoice-summary div:nth-child(3) { grid-column: auto; }
+  .customer-statement .invoice-summary strong { font-size: 13px; white-space: nowrap; }
+  .customer-statement .table-wrap, .customer-statement .invoice-lines { overflow: visible !important; }
+  .customer-statement .invoice-line { min-width: 0 !important; }
+}
+@media print {
+  .app-shell { display: block !important; }
+  .app-shell > .sidebar, .app-shell > .main-content, .app-shell > .mobile-nav { display: none !important; }
+  .modal-backdrop { width: 100% !important; }
+}
+
+@media (max-width: 620px) {
+  .collection-alerts .table-wrap { overflow-x: visible; }
+  .collection-alerts table, .collection-alerts tbody, .collection-alerts tr, .collection-alerts td { display: block; width: 100%; min-width: 0; }
+  .collection-alerts thead { display: none; }
+  .collection-alerts tr { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; }
+  .collection-alerts td { border: 0; padding: 5px 0; display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+  .collection-alerts td[data-label]::before { content: attr(data-label); color: var(--muted); font-size: 10px; flex: 0 0 auto; }
+  .collection-alerts td:first-child { display: block; font-size: 13px; }
+}
+
+.period-report .month-picker { display: flex; gap: 6px; margin-top: 8px; }
+@media print { .period-report .month-picker { display: none !important; } }
