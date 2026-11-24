@@ -94,6 +94,12 @@ export default function Page() {
     }
   }, [])
   const [notice, setNotice] = useState('')
+  const [noticeError, setNoticeError] = useState(false)
+  function showNotice(text: string, isError = false) {
+    setNotice(text)
+    setNoticeError(isError)
+    setTimeout(() => setNotice(''), 2500)
+  }
   const [newProduct, setNewProduct] = useState({ name: '', code: '', category: productCategories[0], stock: '', price: '', cost: '' })
   const [expenseForm, setExpenseForm] = useState({ title: '', amount: '', note: '' })
   const [showSupplier, setShowSupplier] = useState(false)
@@ -112,6 +118,13 @@ export default function Page() {
   const [supplierPayment, setSupplierPayment] = useState('')
   const backupInputRef = useRef<HTMLInputElement>(null)
   const hasLoadedProducts = useRef(false)
+  const submittingRef = useRef(false)
+  function beginSubmit() {
+    if (submittingRef.current) return false
+    submittingRef.current = true
+    setTimeout(() => { submittingRef.current = false }, 800)
+    return true
+  }
   const categoriesCount = new Set(products.map((product) => product.category)).size
 
   const filteredProducts = useMemo(() => products.filter((p) => p.name.includes(search) || p.code.toLowerCase().includes(search.toLowerCase())), [products, search])
@@ -251,7 +264,7 @@ export default function Page() {
         setNotice('تمت استعادة البيانات بنجاح')
         setTimeout(() => setNotice(''), 2500)
       } catch {
-        setNotice('ملف النسخة الاحتياطية غير صالح')
+        showNotice('ملف النسخة الاحتياطية غير صالح', true)
         setTimeout(() => setNotice(''), 2500)
       } finally {
         event.target.value = ''
@@ -264,12 +277,19 @@ export default function Page() {
     event.preventDefault()
     if (!paymentSale) return
     const amount = Number(paymentAmount)
-    if (!amount || amount <= 0 || amount > paymentSale.remaining) return
+    if (!amount || amount <= 0) return
+    if (amount > paymentSale.remaining) {
+      showNotice('المبلغ أكبر من المتبقي على الفاتورة', true)
+      setTimeout(() => setNotice(''), 2500)
+      return
+    }
+    if (!beginSubmit()) return
     const remaining = paymentSale.remaining - amount
     const date = new Date().toLocaleDateString('ar-EG')
     setSales(sales.map((sale) => sale.id === paymentSale.id ? { ...sale, paid: sale.paid + amount, remaining, payment: remaining > 0 ? 'آجل' : 'نقدي' } : sale))
-    setCustomers(customers.map((customer) => customer.name === paymentSale.customer ? { ...customer, balance: Math.max(0, customer.balance - amount), lastActivity: date } : customer))
+    setCustomers(customers.map((customer) => customer.name === paymentSale.customer ? { ...customer, balance: customer.balance - amount, lastActivity: date } : customer))
     setCustomerPayments([{ id: `PAY-${Date.now()}`, customer: paymentSale.customer, amount, date, note: `دفعة على الفاتورة ${paymentSale.id}`, type: 'دفعة' }, ...customerPayments])
+    setAuditLogs([{ id: `LOG-${Date.now()}`, action: 'تسجيل دفعة على فاتورة', target: `${paymentSale.id} — ${amount.toLocaleString('ar-EG')} ج.م`, date }, ...auditLogs])
     setPaymentSale(null)
     setPaymentAmount('')
     setNotice('تم تسجيل الدفعة وتحديث الحساب')
@@ -277,6 +297,7 @@ export default function Page() {
   }
 
   function editSale(sale: Sale) {
+    setSelectedSale(null)
     setEditingSale({ ...sale, items: sale.items.map((item) => ({ ...item })) })
   }
 
@@ -286,8 +307,13 @@ export default function Page() {
     const subtotal = editingSale.items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0)
     const discount = Math.min(Math.max(editingSale.discount, 0), subtotal)
     const total = subtotal - discount
-    if (editingSale.paid < 0 || editingSale.paid > total || editingSale.items.some((item) => !Number.isInteger(item.quantity) || item.quantity < 1 || item.unitPrice <= 0)) {
-      setNotice('راجع الكميات والأسعار والمبلغ المدفوع')
+    if (editingSale.paid < 0 || editingSale.items.some((item) => !Number.isInteger(item.quantity) || item.quantity < 1 || item.unitPrice <= 0)) {
+      showNotice('راجع الكميات والأسعار والمبلغ المدفوع', true)
+      setTimeout(() => setNotice(''), 2500)
+      return
+    }
+    if (editingSale.paid > total) {
+      showNotice('المبلغ المدفوع أكبر من قيمة الفاتورة', true)
       setTimeout(() => setNotice(''), 2500)
       return
     }
@@ -295,15 +321,46 @@ export default function Page() {
     const original = sales.find((sale) => sale.id === editingSale.id)
     if (!original) return
     const oldQuantities = original.items.reduce<Record<string, number>>((all, item) => ({ ...all, [item.code]: (all[item.code] || 0) + item.quantity }), {})
+    const stockShortage = products.some((product) => (previousQuantities[product.code] || 0) > product.stock + (oldQuantities[product.code] || 0))
+    if (stockShortage) {
+      showNotice('الكمية المطلوبة أكبر من المتاح في المخزون', true)
+      setTimeout(() => setNotice(''), 2500)
+      return
+    }
     const remaining = total - editingSale.paid
-    const updatedSale: Sale = { ...editingSale, customer: editingSale.customer.trim() || 'عميل نقدي', subtotal, discount, total, remaining, payment: remaining > 0 ? 'آجل' : 'نقدي' }
+    const customerName = editingSale.customer.trim().replace(/\s+/g, ' ') || 'عميل نقدي'
+    if (remaining > 0 && customerName === 'عميل نقدي') {
+      showNotice('الفاتورة الآجلة لازم تتسجل باسم عميل', true)
+      setTimeout(() => setNotice(''), 2500)
+      return
+    }
+    if (!beginSubmit()) return
+    const updatedSale: Sale = { ...editingSale, customer: customerName, subtotal, discount, total, remaining, payment: remaining > 0 ? 'آجل' : 'نقدي' }
+    const date = new Date().toLocaleDateString('ar-EG')
     setProducts(products.map((product) => ({ ...product, stock: product.stock + (oldQuantities[product.code] || 0) - (previousQuantities[product.code] || 0) })))
-    const customerDelta = remaining - original.remaining
-    setCustomers(customers.map((entry) => entry.name === updatedSale.customer ? { ...entry, balance: Math.max(0, entry.balance + customerDelta), lastActivity: new Date().toLocaleDateString('ar-EG') } : entry))
+    const saleStockDeltas = products
+      .map((product) => ({ product, delta: (oldQuantities[product.code] || 0) - (previousQuantities[product.code] || 0) }))
+      .filter((entry) => entry.delta !== 0)
+    if (saleStockDeltas.length) {
+      setStockMovements([...saleStockDeltas.map((entry) => ({ id: `MOV-${Date.now()}-${entry.product.code}`, code: entry.product.code, product: entry.product.name, quantity: Math.abs(entry.delta), type: 'تعديل' as const, reason: `تعديل الفاتورة ${updatedSale.id} — ${entry.delta > 0 ? 'إرجاع' : 'خصم'} ${Math.abs(entry.delta)}`, date })), ...stockMovements])
+    }
+    const originalCustomer = original.customer
+    const customerExists = customers.some((entry) => entry.name === customerName)
+    setCustomers(
+      remaining > 0 && !customerExists
+        ? [...customers.map((entry) => entry.name === originalCustomer ? { ...entry, balance: entry.balance - original.remaining, lastActivity: date } : entry), { name: customerName, phone: '', balance: remaining, lastActivity: date }]
+        : customers.map((entry) => {
+            if (entry.name !== originalCustomer && entry.name !== customerName) return entry
+            let balance = entry.balance
+            if (entry.name === originalCustomer) balance -= original.remaining
+            if (entry.name === customerName) balance += remaining
+            return { ...entry, balance, lastActivity: date }
+          })
+    )
     setSales(sales.map((entry) => entry.id === updatedSale.id ? updatedSale : entry))
     setSelectedSale(updatedSale)
     setEditingSale(null)
-    setAuditLogs([{ id: `LOG-${Date.now()}`, action: 'تعديل فاتورة بيع', target: updatedSale.id, date: new Date().toLocaleDateString('ar-EG') }, ...auditLogs])
+    setAuditLogs([{ id: `LOG-${Date.now()}`, action: 'تعديل فاتورة بيع', target: updatedSale.id, date }, ...auditLogs])
     setNotice('تم تعديل الفاتورة وتحديث المخزون والحساب')
     setTimeout(() => setNotice(''), 2500)
   }
@@ -312,7 +369,8 @@ export default function Page() {
     if (!window.confirm('هل تريد حذف الفاتورة؟ سيتم إعادة الكميات للمخزون.')) return
     const date = new Date().toLocaleDateString('ar-EG')
     setProducts(products.map((product) => { const item = sale.items.find((line) => line.code === product.code); return item ? { ...product, stock: product.stock + item.quantity } : product }))
-    setCustomers(customers.map((customer) => customer.name === sale.customer ? { ...customer, balance: Math.max(0, customer.balance - sale.remaining), lastActivity: date } : customer))
+    setStockMovements([...sale.items.map((item) => ({ id: `MOV-${Date.now()}-${item.code}`, code: item.code, product: item.product, quantity: item.quantity, type: 'تعديل' as const, reason: `إرجاع كميات حذف الفاتورة ${sale.id}`, date })), ...stockMovements])
+    setCustomers(customers.map((customer) => customer.name === sale.customer ? { ...customer, balance: customer.balance - sale.remaining, lastActivity: date } : customer))
     setSales(sales.filter((item) => item.id !== sale.id))
     setAuditLogs([{ id: `LOG-${Date.now()}`, action: 'حذف فاتورة بيع', target: sale.id, date }, ...auditLogs])
     setNotice('تم حذف الفاتورة وإرجاع الكميات وتحديث رصيد العميل')
@@ -326,7 +384,7 @@ export default function Page() {
     const exactProduct = saleCategoryProducts.find((product) => `${product.name} — ${product.code}` === saleProductSearch || product.name === saleProductSearch || product.code === saleProductSearch)
     const product = products.find((item) => item.code === newSale.product) || exactProduct || (filteredSaleProducts.length === 1 ? filteredSaleProducts[0] : undefined)
     if (product) addItemToSale(product.code)
-    else setNotice('اختار منتجًا من القائمة المنسدلة أولًا')
+    else showNotice('اختار منتجًا من القائمة المنسدلة أولًا', true)
   }
 
   function addItemToSale(productCode = newSale.product) {
@@ -344,24 +402,25 @@ export default function Page() {
   function addSale(event: React.FormEvent) {
     event.preventDefault()
     const paid = newSale.payment === 'نقدي' ? saleTotal : Number(newSale.paid)
-    const customerName = newSale.customer.trim() || 'عميل نقدي'
-    const overpayment = paid - saleTotal
-    if (!saleItems.length || paid < 0 || (overpayment > 0 && customerName === 'عميل نقدي') || (newSale.payment === 'آجل' && !newSale.customer.trim())) return
+    const customerName = newSale.customer.trim().replace(/\s+/g, ' ') || 'عميل نقدي'
+    if (!saleItems.length || paid < 0 || (newSale.payment === 'آجل' && !newSale.customer.trim())) return
+    if (paid > saleTotal) {
+      showNotice('المبلغ المدفوع أكبر من قيمة الفاتورة', true)
+      setTimeout(() => setNotice(''), 2500)
+      return
+    }
+    if (!beginSubmit()) return
     const date = new Date().toLocaleDateString('ar-EG')
     const invoiceId = `INV-${Date.now()}`
     setProducts(products.map((product) => { const sold = saleItems.find((item) => item.code === product.code); return sold ? { ...product, stock: product.stock - sold.quantity } : product }))
     setStockMovements([...saleItems.map((item) => ({ id: `MOV-${Date.now()}-${item.code}`, code: item.code, product: item.product, quantity: item.quantity, type: 'بيع' as const, reason: `الفاتورة ${invoiceId}`, date })), ...stockMovements])
     setAuditLogs([{ id: `LOG-${Date.now()}`, action: 'إضافة فاتورة', target: invoiceId, date }, ...auditLogs])
-    const invoicePaid = Math.min(paid, saleTotal)
-    const invoiceRemaining = saleTotal - invoicePaid
-    setSales([{ id: invoiceId, customer: customerName, items: saleItems, subtotal: saleSubtotal, discount: saleDiscount, total: saleTotal, paid: invoicePaid, remaining: invoiceRemaining, payment: invoiceRemaining > 0 ? 'آجل' : 'نقدي', notes: newSale.notes, date }, ...sales])
+    const invoice: Sale = { id: invoiceId, customer: customerName, items: saleItems, subtotal: saleSubtotal, discount: saleDiscount, total: saleTotal, paid, remaining: saleTotal - paid, payment: saleTotal - paid > 0 ? 'آجل' : 'نقدي', notes: newSale.notes, date }
+    setSales([invoice, ...sales])
     if (newSale.payment === 'آجل') {
       const existing = customers.find((customer) => customer.name === customerName)
       const balanceDelta = saleTotal - paid
-      setCustomers(existing ? customers.map((customer) => customer.name === customerName ? { ...customer, balance: Math.max(0, customer.balance + balanceDelta), lastActivity: date } : customer) : [...customers, { name: customerName, phone: '', balance: Math.max(0, balanceDelta), lastActivity: date }])
-      if (existing && overpayment > 0) {
-        setCustomerPayments([{ id: `PAY-${Date.now()}`, customer: customerName, amount: overpayment, date, note: `دفعة زائدة على الفاتورة ${invoiceId} لتقليل الرصيد السابق`, type: 'دفعة' }, ...customerPayments])
-      }
+      setCustomers(existing ? customers.map((customer) => customer.name === customerName ? { ...customer, balance: customer.balance + balanceDelta, lastActivity: date } : customer) : [...customers, { name: customerName, phone: '', balance: balanceDelta, lastActivity: date }])
     }
     setNewSale({ category: '', product: '', customer: '', quantity: '1', payment: 'نقدي', paid: '', discount: '0', notes: '' })
     setSaleItems([])
@@ -376,6 +435,7 @@ export default function Page() {
     if (!name || customers.some((customer) => customer.name === name)) return
     const date = new Date().toLocaleDateString('ar-EG')
     setCustomers([...customers, { name, phone: customerForm.phone.trim(), balance: 0, lastActivity: date, kind: customerForm.kind }])
+    setAuditLogs([{ id: `LOG-${Date.now()}`, action: 'إضافة حساب عميل', target: name, date }, ...auditLogs])
     setCustomerForm({ name: '', phone: '', kind: 'عميل' })
     setShowCustomer(false)
     setNotice('تمت إضافة الحساب بنجاح')
@@ -390,15 +450,17 @@ export default function Page() {
     setCustomers(customers.map((item) => item.name === customer.name ? { ...item, name, phone } : item))
     setSales(sales.map((sale) => sale.customer === customer.name ? { ...sale, customer: name } : sale))
     setCustomerPayments(customerPayments.map((payment) => payment.customer === customer.name ? { ...payment, customer: name } : payment))
+    setAuditLogs([{ id: `LOG-${Date.now()}`, action: 'تعديل بيانات حساب', target: `${customer.name} → ${name}`, date: new Date().toLocaleDateString('ar-EG') }, ...auditLogs])
     setSelectedCustomer({ ...customer, name, phone })
     setNotice('تم تعديل بيانات الحساب')
     setTimeout(() => setNotice(''), 2500)
   }
 
   function deleteCustomer(customer: Customer) {
-    if (customer.balance > 0) { setNotice('لا يمكن حذف حساب عليه رصيد متبقي'); setTimeout(() => setNotice(''), 2500); return }
+    if (customer.balance !== 0) { setNotice('لا يمكن حذف حساب له رصيد متبقي أو دائن'); setTimeout(() => setNotice(''), 2500); return }
     if (!window.confirm(`هل تريد حذف حساب ${customer.name}؟`)) return
     setCustomers(customers.filter((item) => item.name !== customer.name))
+    setAuditLogs([{ id: `LOG-${Date.now()}`, action: 'حذف حساب عميل', target: customer.name, date: new Date().toLocaleDateString('ar-EG') }, ...auditLogs])
     setSelectedCustomer(null)
     setNotice('تم حذف الحساب')
     setTimeout(() => setNotice(''), 2500)
@@ -412,6 +474,7 @@ export default function Page() {
     setSuppliers(suppliers.map((item) => item.id === supplier.id ? { ...item, name, phone } : item))
     setPurchases(purchases.map((purchase) => purchase.supplier === supplier.name ? { ...purchase, supplier: name } : purchase))
     setSupplierPayments(supplierPayments.map((payment) => payment.supplier === supplier.name ? { ...payment, supplier: name } : payment))
+    setAuditLogs([{ id: `LOG-${Date.now()}`, action: 'تعديل بيانات مورد', target: `${supplier.name} → ${name}`, date: new Date().toLocaleDateString('ar-EG') }, ...auditLogs])
     setSupplierReport({ ...supplier, name, phone })
     setNotice('تم تعديل بيانات المورد')
     setTimeout(() => setNotice(''), 2500)
@@ -421,6 +484,7 @@ export default function Page() {
     if (supplier.balance > 0) { setNotice('لا يمكن حذف مورد عليه رصيد متبقي'); setTimeout(() => setNotice(''), 2500); return }
     if (!window.confirm(`هل تريد حذف المورد ${supplier.name}؟`)) return
     setSuppliers(suppliers.filter((item) => item.id !== supplier.id))
+    setAuditLogs([{ id: `LOG-${Date.now()}`, action: 'حذف مورد', target: supplier.name, date: new Date().toLocaleDateString('ar-EG') }, ...auditLogs])
     setSupplierReport(null)
     setNotice('تم حذف المورد')
     setTimeout(() => setNotice(''), 2500)
@@ -431,9 +495,16 @@ export default function Page() {
     if (!selectedCustomer) return
     const amount = Number(customerPayment.amount)
     if (!amount || amount <= 0) return
+    const currentBalance = customers.find((customer) => customer.name === selectedCustomer.name)?.balance ?? selectedCustomer.balance
+    if (customerPayment.type === 'دفعة' && amount > currentBalance) {
+      showNotice('المبلغ أكبر من المستحق على العميل', true)
+      setTimeout(() => setNotice(''), 2500)
+      return
+    }
+    if (!beginSubmit()) return
     const date = new Date().toLocaleDateString('ar-EG')
     const delta = customerPayment.type === 'سُلفة' ? amount : -amount
-    setCustomers(customers.map((customer) => customer.name === selectedCustomer.name ? { ...customer, balance: Math.max(0, customer.balance + delta), lastActivity: date } : customer))
+    setCustomers(customers.map((customer) => customer.name === selectedCustomer.name ? { ...customer, balance: customer.balance + delta, lastActivity: date } : customer))
     if (customerPayment.type === 'دفعة') {
       let remainingPayment = amount
       const updatedSales = sales.map((sale) => {
@@ -445,6 +516,7 @@ export default function Page() {
       setSales(updatedSales)
     }
     setCustomerPayments([{ id: `PAY-${Date.now()}`, customer: selectedCustomer.name, amount, date, note: customerPayment.note, type: customerPayment.type }, ...customerPayments])
+    setAuditLogs([{ id: `LOG-${Date.now()}`, action: customerPayment.type === 'سُلفة' ? 'تسجيل سُلفة لعميل' : 'تسجيل دفعة من عميل', target: `${selectedCustomer.name} — ${amount.toLocaleString('ar-EG')} ج.م`, date }, ...auditLogs])
     setSelectedCustomer(null)
     setCustomerPayment({ amount: '', note: '', type: 'دفعة' })
     setNotice('تم تسجيل الحركة وتحديث الحساب')
@@ -475,6 +547,7 @@ export default function Page() {
     if (!supplierForm.name.trim() || openingBalance < 0) return
     const supplier: Supplier = { id: `SUP-${Date.now()}`, name: supplierForm.name.trim(), phone: supplierForm.phone.trim(), balance: openingBalance }
     setSuppliers([supplier, ...suppliers])
+    setAuditLogs([{ id: `LOG-${Date.now()}`, action: 'إضافة مورد', target: supplier.name, date: new Date().toLocaleDateString('ar-EG') }, ...auditLogs])
     setSupplierForm({ name: '', phone: '', balance: '' })
     setShowSupplier(false)
     setNotice(openingBalance > 0 ? 'تمت إضافة المورد ورصيد المديونية السابقة' : 'تمت إضافة المورد')
@@ -517,12 +590,13 @@ export default function Page() {
     const supplier = suppliers.find((item) => item.id === purchaseForm.supplier)
     if (!supplier) { setNotice('اختر المورد أولاً'); setTimeout(() => setNotice(''), 2500); return }
     if (!purchaseItems.length) { setNotice('أضف منتجاً واحداً على الأقل للسلة'); setTimeout(() => setNotice(''), 2500); return }
+    if (!beginSubmit()) return
     const paid = Math.min(Math.max(Number(purchaseForm.paid) || 0, 0), purchaseTotal)
     const date = new Date().toLocaleDateString('ar-EG')
     const purchaseId = `PUR-${Date.now()}`
     setProducts(purchaseItems.reduce((nextProducts, item) => {
       const existing = nextProducts.find((product) => product.code === item.code)
-      return existing ? nextProducts.map((product) => product.code === item.code ? { ...product, stock: product.stock + item.quantity, category: item.category, cost: item.cost, price: item.salePrice } : product) : [...nextProducts, { name: item.product, code: item.code, category: item.category, stock: item.quantity, price: item.salePrice, cost: item.cost, color: '#ddd6cb' }]
+      return existing ? nextProducts.map((product) => product.code === item.code ? { ...product, stock: product.stock + item.quantity, cost: item.cost, price: item.salePrice } : product) : [...nextProducts, { name: item.product, code: item.code, category: item.category, stock: item.quantity, price: item.salePrice, cost: item.cost, color: '#ddd6cb' }]
     }, products))
     setSuppliers(suppliers.map((item) => item.id === supplier.id ? { ...item, balance: item.balance + purchaseTotal - paid } : item))
     setPurchases([{ id: purchaseId, supplier: supplier.name, items: purchaseItems, total: purchaseTotal, paid, date }, ...purchases])
@@ -536,6 +610,7 @@ export default function Page() {
   }
 
   function editPurchase(purchase: Purchase) {
+    setSelectedPurchase(null)
     setEditingPurchase({ ...purchase, items: purchase.items.map((item) => ({ ...item })) })
   }
 
@@ -544,7 +619,7 @@ export default function Page() {
     if (!editingPurchase || !editingPurchase.items.length) return
     const total = editingPurchase.items.reduce((sum, item) => sum + item.quantity * item.cost, 0)
     if (editingPurchase.paid < 0 || editingPurchase.paid > total || editingPurchase.items.some((item) => !Number.isInteger(item.quantity) || item.quantity < 1 || item.cost <= 0 || item.salePrice <= 0)) {
-      setNotice('راجع الكميات والأسعار والمبلغ المدفوع')
+      showNotice('راجع الكميات والأسعار والمبلغ المدفوع', true)
       setTimeout(() => setNotice(''), 2500)
       return
     }
@@ -552,7 +627,23 @@ export default function Page() {
     if (!original) return
     const oldQuantities = original.items.reduce<Record<string, number>>((all, item) => ({ ...all, [item.code]: (all[item.code] || 0) + item.quantity }), {})
     const newQuantities = editingPurchase.items.reduce<Record<string, number>>((all, item) => ({ ...all, [item.code]: (all[item.code] || 0) + item.quantity }), {})
+    const shortage = products.find((product) => {
+      const delta = (newQuantities[product.code] || 0) - (oldQuantities[product.code] || 0)
+      return delta !== 0 && product.stock + delta < 0
+    })
+    if (shortage) {
+      const reduction = (oldQuantities[shortage.code] || 0) - (newQuantities[shortage.code] || 0)
+      showNotice(`لا يمكن تعديل الفاتورة: المتاح من «${shortage.name}» (${shortage.stock.toLocaleString('ar-EG')}) لا يكفي لخفض الكمية بمقدار (${reduction.toLocaleString('ar-EG')}) دون مخزون بالسالب`, true)
+      return
+    }
+    if (!beginSubmit()) return
     setProducts(products.map((product) => ({ ...product, stock: product.stock - (oldQuantities[product.code] || 0) + (newQuantities[product.code] || 0) })))
+    const purchaseStockDeltas = products
+      .map((product) => ({ product, delta: (newQuantities[product.code] || 0) - (oldQuantities[product.code] || 0) }))
+      .filter((entry) => entry.delta !== 0)
+    if (purchaseStockDeltas.length) {
+      setStockMovements([...purchaseStockDeltas.map((entry) => ({ id: `MOV-${Date.now()}-${entry.product.code}`, code: entry.product.code, product: entry.product.name, quantity: Math.abs(entry.delta), type: 'تعديل' as const, reason: `تعديل فاتورة شراء ${editingPurchase.id} — ${entry.delta > 0 ? 'زيادة' : 'خصم'} ${Math.abs(entry.delta)}`, date: new Date().toLocaleDateString('ar-EG') })), ...stockMovements])
+    }
     const originalDue = original.total - original.paid
     const newDue = total - editingPurchase.paid
     setSuppliers(suppliers.map((supplier) => supplier.name === original.supplier ? { ...supplier, balance: Math.max(0, supplier.balance - originalDue + newDue) } : supplier))
@@ -566,13 +657,22 @@ export default function Page() {
   }
 
   function deletePurchase(purchase: Purchase) {
+    const required = purchase.items.reduce<Record<string, number>>((all, item) => ({ ...all, [item.code]: (all[item.code] || 0) + item.quantity }), {})
+    const shortage = products.find((product) => (required[product.code] || 0) > product.stock)
+    if (shortage) {
+      showNotice(`لا يمكن حذف الفاتورة: المتاح من «${shortage.name}» (${shortage.stock.toLocaleString('ar-EG')}) أقل من كميتها في الفاتورة (${(required[shortage.code] || 0).toLocaleString('ar-EG')})`, true)
+      return
+    }
     if (!window.confirm('هل تريد حذف فاتورة الشراء؟ سيتم خصم الكميات وإلغاء المبلغ المستحق للمورد.')) return
+    const date = new Date().toLocaleDateString('ar-EG')
     setProducts(products.map((product) => {
-      const item = purchase.items.find((line) => line.code === product.code)
-      return item ? { ...product, stock: Math.max(0, product.stock - item.quantity) } : product
+      const qty = required[product.code] || 0
+      return qty ? { ...product, stock: product.stock - qty } : product
     }))
+    setStockMovements([...purchase.items.map((item) => ({ id: `MOV-${Date.now()}-${item.code}`, code: item.code, product: item.product, quantity: item.quantity, type: 'تعديل' as const, reason: `حذف فاتورة شراء ${purchase.id} — خصم ${item.quantity}`, date })), ...stockMovements])
     setSuppliers(suppliers.map((supplier) => supplier.name === purchase.supplier ? { ...supplier, balance: Math.max(0, supplier.balance - (purchase.total - purchase.paid)) } : supplier))
     setPurchases(purchases.filter((item) => item.id !== purchase.id))
+    setAuditLogs([{ id: `LOG-${Date.now()}`, action: 'حذف فاتورة شراء', target: purchase.id, date }, ...auditLogs])
     setSelectedPurchase(null)
     setNotice('تم حذف فاتورة الشراء وتحديث المخزون وحساب المورد')
     setTimeout(() => setNotice(''), 2500)
@@ -604,12 +704,16 @@ function updateProductPrices(event: React.FormEvent) {
     if (!name || !Number.isInteger(stock) || stock < 0 || cost < 0 || price <= 0) return
     const duplicateName = products.some((product) => product.code !== editingProduct.code && product.name.trim().toLocaleLowerCase('ar-EG') === name.toLocaleLowerCase('ar-EG'))
     if (duplicateName) {
-      setNotice('اسم المنتج موجود بالفعل في المخزون')
+      showNotice('اسم المنتج موجود بالفعل في المخزون', true)
       setTimeout(() => setNotice(''), 2500)
       return
     }
     setProducts(products.map((product) => product.code === editingProduct.code ? { ...product, name, stock, cost, price } : product))
     const date = new Date().toLocaleDateString('ar-EG')
+    const stockDelta = stock - editingProduct.stock
+    if (stockDelta !== 0) {
+      setStockMovements([{ id: `MOV-${Date.now()}-${editingProduct.code}`, code: editingProduct.code, product: name, quantity: Math.abs(stockDelta), type: 'تعديل' as const, reason: `تعديل يدوي للمخزون — ${stockDelta > 0 ? 'زيادة' : 'خصم'} ${Math.abs(stockDelta)}`, date }, ...stockMovements])
+    }
     setAuditLogs([{ id: `LOG-${Date.now()}`, action: 'تعديل بيانات المنتج والمخزون', target: editingProduct.name, date }, ...auditLogs])
     setEditingProduct(null)
     setNotice('تم تحديث بيانات المنتج والمخزون')
@@ -628,7 +732,7 @@ function updateProductPrices(event: React.FormEvent) {
 
   function addProduct(event: React.FormEvent) {
     event.preventDefault()
-    if (!newProduct.name.trim() || !newProduct.price) return
+    if (!newProduct.name.trim()) return
 
     const name = newProduct.name.trim().replace(/\s+/g, ' ')
     const enteredCode = newProduct.code.trim()
@@ -641,16 +745,26 @@ function updateProductPrices(event: React.FormEvent) {
     const quantity = Number(newProduct.stock) || 0
     const price = Number(newProduct.price)
     const cost = Number(newProduct.cost) || 0
+    const hasPrice = newProduct.price.trim() !== ''
+    const hasCost = newProduct.cost.trim() !== ''
+    if ((hasPrice && (!Number.isFinite(price) || price <= 0)) || (hasCost && (!Number.isFinite(cost) || cost < 0)) || (!existing && !hasPrice)) return
+    if (!beginSubmit()) return
 
     if (existing) {
       setProducts(products.map((product) => product.code === existing.code
-        ? { ...product, stock: product.stock + quantity, category: newProduct.category || product.category, price, cost }
+        ? { ...product, stock: product.stock + quantity, ...(hasCost ? { cost } : {}), ...(hasPrice ? { price } : {}) }
         : product
       ))
+      if (quantity > 0) {
+        setStockMovements([{ id: `MOV-${Date.now()}-${existing.code}`, code: existing.code, product: existing.name, quantity, type: 'تعديل' as const, reason: 'إضافة كمية بدمج منتج موجود', date: new Date().toLocaleDateString('ar-EG') }, ...stockMovements])
+        setAuditLogs([{ id: `LOG-${Date.now()}`, action: 'دمج كمية مع منتج موجود', target: existing.name, date: new Date().toLocaleDateString('ar-EG') }, ...auditLogs])
+      }
       setNotice(`تم دمج ${quantity} من نفس المنتج مع المخزون الحالي`)
     } else {
+      if (!price || price <= 0) return
       const code = enteredCode || `PR-${Date.now().toString().slice(-6)}`
       setProducts([...products, { name, code, category: newProduct.category, stock: quantity, price, cost, color: '#ddd6cb' }])
+      setAuditLogs([{ id: `LOG-${Date.now()}`, action: 'إضافة منتج', target: name, date: new Date().toLocaleDateString('ar-EG') }, ...auditLogs])
       setNotice('تمت إضافة المنتج بنجاح')
     }
 
@@ -684,9 +798,9 @@ function updateProductPrices(event: React.FormEvent) {
           <section className="stat-grid" aria-label="ملخص اليوم"><StatCard title="مبيعات اليوم" value={todayTotal.toLocaleString('ar-EG')} unit="ج.م" detail={todaySales.length ? `${todaySales.length.toLocaleString('ar-EG')} فواتير مسجلة` : 'أضف مبيعاتك من قسم الفواتير'} icon={<ShoppingCart />} tone="coral" /><StatCard title="الربح الإجمالي" value={grossProfit.toLocaleString('ar-EG')} unit="ج.م" detail="المبيعات ناقص تكلفة الشراء" positive icon={<TrendingUp />} tone="green" /><StatCard title="إجمالي المنتجات" value={products.length.toLocaleString('ar-EG')} unit="منتج" detail={`في ${categoriesCount.toLocaleString('ar-EG')} تصنيفات`} icon={<Boxes />} tone="amber" /><StatCard title="فواتير اليوم" value={todaySales.length.toLocaleString('ar-EG')} unit="فاتورة" detail={todaySales.length ? 'تم تسجيلها اليوم' : 'لا توجد فواتير مسجلة بعد'} icon={<ClipboardList />} tone="blue" /><StatCard title="تنبيهات المخزون" value={lowStock.length.toLocaleString('ar-EG')} unit="منتجات" detail="تحتاج إعادة طلب" icon={<Bell />} tone="purple" /><StatCard title="إجمالي المديونيات" value={outstandingTotal.toLocaleString('ar-EG')} unit="ج.م" detail="على العملاء والصنايعية" icon={<CreditCard />} tone="blue" /></section>
           <section className="content-grid"><div className="panel chart-panel"><div className="panel-header"><div><h2>نظرة على المبيعات</h2><p>أداء المبيعات خلال الأسبوع</p></div><select aria-label="اختيار الفترة"><option>هذا الأسبوع</option><option>هذا الشهر</option></select></div><div className="chart"><div className="chart-y"><span>١٢k</span><span>٨k</span><span>٤k</span><span>٠</span></div><div className="bars">{['السبت','الأحد','الإثنين','الثلاثاء','الأربعاء','الخميس','الجمعة'].map((day, i) => <div className="bar-col" key={day}><div className={`bar ${i === 5 ? 'highlight' : ''}`} style={{ height: `${[48, 67, 54, 79, 62, 94, 42][i]}%` }} /><span>{day}</span></div>)}</div></div></div><div className="panel alerts-panel"><div className="panel-header"><div><h2>تنبيهات المخزون</h2><p>منتجات قاربت على النفاد</p></div><button className="text-button" onClick={() => setActive('المخزون والمنتجات')}>عرض الكل</button></div><div className="alert-list">{lowStock.slice(0, showAllStockAlerts ? undefined : 5).map((p) => <div className="alert-row" key={p.code}><div className="product-swatch" style={{ background: p.color }} /><div className="alert-info"><strong>{p.name}</strong><span>{p.code}</span></div><b>{p.stock} عبوات</b></div>)}</div>{lowStock.length > 5 && <button className="text-button" aria-expanded={showAllStockAlerts} onClick={() => setShowAllStockAlerts((current) => !current)}>{showAllStockAlerts ? 'عرض أقل' : `عرض المزيد (${(lowStock.length - 5).toLocaleString('ar-EG')})`}</button>}</div></section>
           <section className="panel products-panel"><div className="panel-header"><div><h2>أحدث المنتجات</h2><p>آخر المنتجات المضافة للمخزون</p></div><button className="text-button" onClick={() => setActive('المخزون والمنتجات')}>عرض المخزون <span>←</span></button></div><ProductTable products={products.slice(0, 4)} emptyMessage="لم تتم إضافة منتجات بعد. ابدأ بإدخال أصناف المحل الفعلية." onEdit={(product) => { setEditingProduct(product); setEditProductForm({ name: product.name, stock: String(product.stock), cost: String(product.cost), price: String(product.price) }) }} onDelete={deleteProduct} /></section>
-        </> : active === 'المبيعات والفواتير' ? <section className="panel inventory-view"><div className="panel-header"><div><h2>سجل الفواتير</h2><p>كل الفواتير التي سجلها المستخدم على هذا الجهاز</p></div><input className="table-search" value={invoiceSearch} onChange={(e) => setInvoiceSearch(e.target.value)} placeholder="ابحث برقم الفاتورة أو اسم العميل" aria-label="البحث في الفواتير" /></div>{filteredSales.length ? <div className="table-wrap"><table><thead><tr><th>رقم الفاتورة</th><th>العميل</th><th>الم��تجات</th><th>عدد الأصناف</th><th>الإجمالي قبل الخصم</th><th>الإجمالي</th><th>المدفوع</th><th>المتبقي</th><th>الحالة</th><th>التاريخ</th><th>الإجراءات</th></tr></thead><tbody>{sales.map((sale) => <tr key={sale.id}><td><strong>{sale.id}</strong></td><td>{sale.customer}</td><td>{sale.items.map((item) => item.product).join('، ')}</td><td>{sale.items.length.toLocaleString('ar-EG')} أصناف</td><td>{sale.subtotal.toLocaleString('ar-EG')} ج.م</td><td><strong>{sale.total.toLocaleString('ar-EG')} ج.م</strong></td><td>{sale.paid.toLocaleString('ar-EG')} ج.م</td><td>{sale.remaining.toLocaleString('ar-EG')} ج.م</td><td><span className={`badge ${sale.remaining > 0 ? 'warning' : 'good'}`}>{sale.remaining > 0 ? 'آجل' : 'مدفوعة بالكامل'}</span></td><td>{sale.date}</td><td><div className="row-actions"><button className="text-button" onClick={() => setSelectedSale(sale)}>عرض / طباعة</button>{sale.remaining > 0 && <button className="text-button" onClick={() => { setPaymentSale(sale); setPaymentAmount('') }}>تسجيل دفعة</button>}<button className="danger-button" onClick={() => deleteSale(sale)}>حذف</button></div></td></tr>)}</tbody></table></div> : <div className="empty-state"><ReceiptText size={28} /><strong>لا توجد فواتير بعد</strong><p>ابدأ بتسجيل أول عملية بيع فعلية.</p></div>}</section> : active === 'الموردين والمشتريات' ? <section className="supplier-page"><div className="supplier-panels"><section className="panel inventory-view"><div className="panel-header"><div><h2>الموردين</h2><p>أرصدة الموردين والمدفوعات المستحقة</p><input className="table-search" value={supplierSearch} onChange={(e) => setSupplierSearch(e.target.value)} placeholder="ابحث باسم المورد أو الهاتف" aria-label="البحث في الموردين" /></div><button className="outline-button" onClick={() => setShowSupplier(true)}><Plus size={16} /> إضافة مورد</button></div>{suppliers.length ? <div className="table-wrap"><table><thead><tr><th>المورد</th><th>الهاتف</th><th>إجمالي المشتريات</th><th>المتبقي</th><th>إجراء</th></tr></thead><tbody>{filteredSuppliers.map((supplier) => { const supplierPurchases = purchases.filter((purchase) => purchase.supplier === supplier.name); return <tr key={supplier.id}><td><strong>{supplier.name}</strong></td><td>{supplier.phone || '—'}</td><td>{supplierPurchases.reduce((sum, purchase) => sum + purchase.total, 0).toLocaleString('ar-EG')} ج.م</td><td><strong className={supplier.balance > 0 ? 'negative' : 'positive'}>{supplier.balance.toLocaleString('ar-EG')} ج.م</strong></td><td><div className="row-actions"><button className="text-button" onClick={() => { setSelectedSupplier(supplier); setSupplierPayment('') }}>تسجيل دفعة</button><button className="text-button" onClick={() => { setOpeningBalanceSupplier(supplier); setOpeningBalanceAmount('') }}>إضافة رصيد سابق</button><button className="text-button" onClick={() => setSupplierReport(supplier)}>تقرير المورد</button></div></td></tr>})}</tbody></table></div> : <div className="empty-state"><UserRound size={28} /><strong>لا يوجد موردون بعد</strong><p>أضف أول مورد لبدء تسجيل المشتريات.</p></div>}</section><section className="panel inventory-view"><div className="panel-header"><div><h2>فواتير المشتريات</h2><p>كل فواتير شراء الدهانات المسجلة</p></div><button className="primary-button" onClick={() => setShowPurchase(true)}><Plus size={16} /> تسجيل فاتورة شراء</button></div>{purchases.length ? <div className="table-wrap"><table><thead><tr><th>رقم الفاتورة</th><th>المورد</th><th>المنتج</th><th>الإجمالي</th><th>المدفوع</th><th>المتبقي</th><th>التاريخ</th></tr></thead><tbody>{purchases.map((purchase) => <tr key={purchase.id}><td><strong>{purchase.id}</strong></td><td>{purchase.supplier}</td><td>{purchase.items.map((item) => `${item.product} × ${item.quantity}`).join('، ')}</td><td>{purchase.total.toLocaleString('ar-EG')} ج.م</td><td>{purchase.paid.toLocaleString('ar-EG')} ج.م</td><td>{(purchase.total - purchase.paid).toLocaleString('ar-EG')} ج.م</td><td>{purchase.date}</td><td><button className="text-button" onClick={() => setSelectedPurchase(purchase)}>عرض / طباعة</button></td></tr>)}</tbody></table></div> : <div className="empty-state"><ReceiptText size={28} /><strong>لا توجد فواتير شراء بعد</strong><p>سجّل أول فاتورة لتحديث المخزون وحساب مديونية المورد.</p></div>}</section></div></section> : active === 'التقارير' ? <section className="panel inventory-view"><div className="panel-header"><div><h2>تقرير الأرباح والمصروفات</h2><p>صافي الربح محسوب من تكلفة الشراء والمبيعات الفعلية</p></div><form className="inline-expense-form" onSubmit={addExpense}><input aria-label="اسم المصروف" placeholder="اسم المصروف" value={expenseForm.title} onChange={(e) => setExpenseForm({ ...expenseForm, title: e.target.value })} /><input aria-label="قيمة المصروف" type="number" min="1" placeholder="القيمة" value={expenseForm.amount} onChange={(e) => setExpenseForm({ ...expenseForm, amount: e.target.value })} /><button className="primary-button" type="submit">إضافة مصروف</button></form></div><div className="stat-grid report-stats"><StatCard title="إجمالي المبيعات" value={sales.reduce((sum, sale) => sum + sale.total, 0).toLocaleString('ar-EG')} unit="ج.م" detail={`${sales.length} فاتورة`} icon={<TrendingUp />} tone="coral" /><StatCard title="تكلفة البضاعة" value={sales.reduce((sum, sale) => sum + sale.items.reduce((total, item) => total + item.unitCost * item.quantity, 0), 0).toLocaleString('ar-EG')} unit="ج.م" detail="حساب سعر الشراء" icon={<Boxes />} tone="amber" /><StatCard title="المصروفات" value={expenses.reduce((sum, expense) => sum + expense.amount, 0).toLocaleString('ar-EG')} unit="ج.م" detail={`${expenses.length} مصروف`} icon={<WalletCards />} tone="purple" /><StatCard title="صافي الربح" value={(sales.reduce((sum, sale) => sum + sale.total - sale.items.reduce((total, item) => total + item.unitCost * item.quantity, 0), 0) - expenses.reduce((sum, expense) => sum + expense.amount, 0)).toLocaleString('ar-EG')} unit="ج.م" detail="المبيعات - التكلفة - المصروفات" icon={<TrendingUp />} tone="blue" /></div><div className="table-wrap"><table><thead><tr><th>المصروف</th><th>القيمة</th><th>التاريخ</th><th>ملاحظات</th></tr></thead><tbody>{expenses.map((expense) => <tr key={expense.id}><td>{expense.title}</td><td>{expense.amount.toLocaleString('ar-EG')} ج.م</td><td>{expense.date}</td><td>{expense.note || '—'}</td></tr>)}</tbody></table></div><div className="panel-header audit-header"><div><h2>سجل التعديلات</h2><p>تتبع الإضافات والحذف والمصروفات</p></div></div><div className="statement-list">{auditLogs.length ? auditLogs.slice(0, 10).map((log) => <div className="statement-row" key={log.id}><span>{log.action} — {log.target}</span><strong>{log.date}</strong></div>) : <div className="empty-state">لا توجد تعديلات مسجلة بعد</div>}</div></section> : active === 'العملاء' ? <section className="panel inventory-view"><div className="panel-header"><div><h2>حسابات العملاء والصنايعية</h2><p>تابع المديونيات والأقساط المتبقية لكل حساب</p><input className="table-search" value={customerSearch} onChange={(e) => setCustomerSearch(e.target.value)} placeholder="ابحث باسم العميل أو الهاتف" aria-label="البحث في العملاء" /></div><span className="badge warning">إجمالي المستحق: {customers.reduce((sum, customer) => sum + customer.balance, 0).toLocaleString('ar-EG')} ج.م</span></div>{customers.length ? <div className="table-wrap"><table><thead><tr><th>اسم الحساب</th><th>رقم الهاتف</th><th>الرصيد المستحق</th><th>آخر حركة</th><th>الحالة</th></tr></thead><tbody>{filteredCustomers.map((customer) => <tr key={customer.name} className="customer-row" onClick={() => setSelectedCustomer(customer)} tabIndex={0} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') setSelectedCustomer(customer) }} aria-label={`عرض حساب ${customer.name}`}><td><strong>{customer.name}</strong></td><td>{customer.phone || '—'}</td><td>{customer.balance.toLocaleString('ar-EG')} ج.م</td><td>{customer.lastActivity}</td><td><span className={`badge ${customer.balance > 0 ? 'warning' : 'good'}`}>{customer.balance > 0 ? 'عليه مديونية' : 'مسدد'}</span></td></tr>)}</tbody></table></div> : <div className="empty-state"><UserRound size={28} /><strong>لا توجد حسابات آجلة</strong><p>ستظهر هنا حسابات االعملاء والصنايعية عند تسجيل أول فاتورة آجل.</p></div>}</section> : <section className="panel inventory-view"><div className="panel-header"><div><h2>قائمة المنتجات</h2><p>إدارة جميع منتجات وأصناف المحل</p></div><div className="search-box"><Search size={17} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="ابحث عن منتج أو كود..." /></div></div><ProductTable products={filteredProducts} emptyMessage="لا توجد منتجات مطابقة للبحث." onEdit={(product) => { setEditingProduct(product); setEditProductForm({ name: product.name, stock: String(product.stock), cost: String(product.cost), price: String(product.price) }) }} onDelete={deleteProduct} /></section>}
+        </> : active === 'المبيعات والفواتير' ? <section className="panel inventory-view"><div className="panel-header"><div><h2>سجل الفواتير</h2><p>كل الفواتير التي سجلها المستخدم على هذا الجهاز</p></div><input className="table-search" value={invoiceSearch} onChange={(e) => setInvoiceSearch(e.target.value)} placeholder="ابحث برقم الفاتورة أو اسم العميل" aria-label="البحث في الفواتير" /></div>{filteredSales.length ? <div className="table-wrap"><table><thead><tr><th>رقم الفاتورة</th><th>العميل</th><th>الم��تجات</th><th>عدد الأصناف</th><th>الإجمالي قبل الخصم</th><th>الإجمالي</th><th>المدفوع</th><th>المتبقي</th><th>الحالة</th><th>التاريخ</th><th>الإجراءات</th></tr></thead><tbody>{filteredSales.map((sale) => <tr key={sale.id}><td><strong>{sale.id}</strong></td><td>{sale.customer}</td><td>{sale.items.map((item) => item.product).join('، ')}</td><td>{sale.items.length.toLocaleString('ar-EG')} أصناف</td><td>{sale.subtotal.toLocaleString('ar-EG')} ج.م</td><td><strong>{sale.total.toLocaleString('ar-EG')} ج.م</strong></td><td>{sale.paid.toLocaleString('ar-EG')} ج.م</td><td>{sale.remaining.toLocaleString('ar-EG')} ج.م</td><td><span className={`badge ${sale.remaining > 0 ? 'warning' : 'good'}`}>{sale.remaining > 0 ? 'آجل' : 'مدفوعة بالكامل'}</span></td><td>{sale.date}</td><td><div className="row-actions"><button className="text-button" onClick={() => setSelectedSale(sale)}>عرض / طباعة</button>{sale.remaining > 0 && <button className="text-button" onClick={() => { setPaymentSale(sale); setPaymentAmount('') }}>تسجيل دفعة</button>}<button className="danger-button" onClick={() => deleteSale(sale)}>حذف</button></div></td></tr>)}</tbody></table></div> : <div className="empty-state"><ReceiptText size={28} /><strong>لا توجد فواتير بعد</strong><p>ابدأ بتسجيل أول عملية بيع فعلية.</p></div>}</section> : active === 'الموردين والمشتريات' ? <section className="supplier-page"><div className="supplier-panels"><section className="panel inventory-view"><div className="panel-header"><div><h2>الموردين</h2><p>أرصدة الموردين والمدفوعات المستحقة</p><input className="table-search" value={supplierSearch} onChange={(e) => setSupplierSearch(e.target.value)} placeholder="ابحث باسم المورد أو الهاتف" aria-label="البحث في الموردين" /></div><button className="outline-button" onClick={() => setShowSupplier(true)}><Plus size={16} /> إضافة مورد</button></div>{suppliers.length ? <div className="table-wrap"><table><thead><tr><th>المورد</th><th>الهاتف</th><th>إجمالي المشتريات</th><th>المتبقي</th><th>إجراء</th></tr></thead><tbody>{filteredSuppliers.map((supplier) => { const supplierPurchases = purchases.filter((purchase) => purchase.supplier === supplier.name); return <tr key={supplier.id}><td><strong>{supplier.name}</strong></td><td>{supplier.phone || '—'}</td><td>{supplierPurchases.reduce((sum, purchase) => sum + purchase.total, 0).toLocaleString('ar-EG')} ج.م</td><td><strong className={supplier.balance > 0 ? 'negative' : 'positive'}>{supplier.balance.toLocaleString('ar-EG')} ج.م</strong></td><td><div className="row-actions"><button className="text-button" onClick={() => { setSelectedSupplier(supplier); setSupplierPayment('') }}>تسجيل دفعة</button><button className="text-button" onClick={() => { setOpeningBalanceSupplier(supplier); setOpeningBalanceAmount('') }}>إضافة رصيد سابق</button><button className="text-button" onClick={() => setSupplierReport(supplier)}>تقرير المورد</button></div></td></tr>})}</tbody></table></div> : <div className="empty-state"><UserRound size={28} /><strong>لا يوجد موردون بعد</strong><p>أضف أول مورد لبدء تسجيل المشتريات.</p></div>}</section><section className="panel inventory-view"><div className="panel-header"><div><h2>فواتير المشتريات</h2><p>كل فواتير شراء الدهانات المسجلة</p></div><button className="primary-button" onClick={() => setShowPurchase(true)}><Plus size={16} /> تسجيل فاتورة شراء</button></div>{purchases.length ? <div className="table-wrap"><table><thead><tr><th>رقم الفاتورة</th><th>المورد</th><th>المنتج</th><th>الإجمالي</th><th>المدفوع</th><th>المتبقي</th><th>التاريخ</th></tr></thead><tbody>{purchases.map((purchase) => <tr key={purchase.id}><td><strong>{purchase.id}</strong></td><td>{purchase.supplier}</td><td>{purchase.items.map((item) => `${item.product} × ${item.quantity}`).join('، ')}</td><td>{purchase.total.toLocaleString('ar-EG')} ج.م</td><td>{purchase.paid.toLocaleString('ar-EG')} ج.م</td><td>{(purchase.total - purchase.paid).toLocaleString('ar-EG')} ج.م</td><td>{purchase.date}</td><td><button className="text-button" onClick={() => setSelectedPurchase(purchase)}>عرض / طباعة</button></td></tr>)}</tbody></table></div> : <div className="empty-state"><ReceiptText size={28} /><strong>لا توجد فواتير شراء بعد</strong><p>سجّل أول فاتورة لتحديث المخزون وحساب مديونية المورد.</p></div>}</section></div></section> : active === 'التقارير' ? <section className="panel inventory-view"><div className="panel-header"><div><h2>تقرير الأرباح والمصروفات</h2><p>صافي الربح محسوب من تكلفة الشراء والمبيعات الفعلية</p></div><form className="inline-expense-form" onSubmit={addExpense}><input aria-label="اسم المصروف" placeholder="اسم المصروف" value={expenseForm.title} onChange={(e) => setExpenseForm({ ...expenseForm, title: e.target.value })} /><input aria-label="قيمة المصروف" type="number" min="1" placeholder="القيمة" value={expenseForm.amount} onChange={(e) => setExpenseForm({ ...expenseForm, amount: e.target.value })} /><button className="primary-button" type="submit">إضافة مصروف</button></form></div><div className="stat-grid report-stats"><StatCard title="إجمالي المبيعات" value={sales.reduce((sum, sale) => sum + sale.total, 0).toLocaleString('ar-EG')} unit="ج.م" detail={`${sales.length} فاتورة`} icon={<TrendingUp />} tone="coral" /><StatCard title="تكلفة البضاعة" value={sales.reduce((sum, sale) => sum + sale.items.reduce((total, item) => total + item.unitCost * item.quantity, 0), 0).toLocaleString('ar-EG')} unit="ج.م" detail="حساب سعر الشراء" icon={<Boxes />} tone="amber" /><StatCard title="المصروفات" value={expenses.reduce((sum, expense) => sum + expense.amount, 0).toLocaleString('ar-EG')} unit="ج.م" detail={`${expenses.length} مصروف`} icon={<WalletCards />} tone="purple" /><StatCard title="صافي الربح" value={(sales.reduce((sum, sale) => sum + sale.total - sale.items.reduce((total, item) => total + item.unitCost * item.quantity, 0), 0) - expenses.reduce((sum, expense) => sum + expense.amount, 0)).toLocaleString('ar-EG')} unit="ج.م" detail="المبيعات - التكلفة - المصروفات" icon={<TrendingUp />} tone="blue" /></div><div className="table-wrap"><table><thead><tr><th>المصروف</th><th>القيمة</th><th>التاريخ</th><th>ملاحظات</th></tr></thead><tbody>{expenses.map((expense) => <tr key={expense.id}><td>{expense.title}</td><td>{expense.amount.toLocaleString('ar-EG')} ج.م</td><td>{expense.date}</td><td>{expense.note || '—'}</td></tr>)}</tbody></table></div><div className="panel-header audit-header"><div><h2>سجل التعديلات</h2><p>تتبع الإضافات والحذف والمصروفات</p></div></div><div className="statement-list">{auditLogs.length ? auditLogs.slice(0, 10).map((log) => <div className="statement-row" key={log.id}><span>{log.action} — {log.target}</span><strong>{log.date}</strong></div>) : <div className="empty-state">لا توجد تعديلات مسجلة بعد</div>}</div></section> : active === 'العملاء' ? <section className="panel inventory-view"><div className="panel-header"><div><h2>حسابات العملاء والصنايعية</h2><p>تابع المديونيات والأقساط المتبقية لكل حساب</p><input className="table-search" value={customerSearch} onChange={(e) => setCustomerSearch(e.target.value)} placeholder="ابحث باسم العميل أو الهاتف" aria-label="البحث في العملاء" /></div><span className="badge warning">إجمالي المستحق: {customers.reduce((sum, customer) => sum + customer.balance, 0).toLocaleString('ar-EG')} ج.م</span></div>{customers.length ? <div className="table-wrap"><table><thead><tr><th>اسم الحساب</th><th>رقم الهاتف</th><th>الرصيد المستحق</th><th>آخر حركة</th><th>الحالة</th></tr></thead><tbody>{filteredCustomers.map((customer) => <tr key={customer.name} className="customer-row" onClick={() => setSelectedCustomer(customer)} tabIndex={0} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') setSelectedCustomer(customer) }} aria-label={`عرض حساب ${customer.name}`}><td><strong>{customer.name}</strong></td><td>{customer.phone || '—'}</td><td>{customer.balance.toLocaleString('ar-EG')} ج.م</td><td>{customer.lastActivity}</td><td><span className={`badge ${customer.balance > 0 ? 'warning' : 'good'}`}>{customer.balance > 0 ? 'عليه مديونية' : customer.balance < 0 ? 'له رصيد دائن' : 'مسدد'}</span></td></tr>)}</tbody></table></div> : <div className="empty-state"><UserRound size={28} /><strong>لا توجد حسابات آجلة</strong><p>ستظهر هنا حسابات االعملاء والصنايعية عند تسجيل أول فاتورة آجل.</p></div>}</section> : <section className="panel inventory-view"><div className="panel-header"><div><h2>قائمة المنتجات</h2><p>إدارة جميع منتجات وأصناف المحل</p></div><div className="search-box"><Search size={17} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="ابحث عن منتج أو كود..." /></div></div><ProductTable products={filteredProducts} emptyMessage="لا توجد منتجات مطابقة للبحث." onEdit={(product) => { setEditingProduct(product); setEditProductForm({ name: product.name, stock: String(product.stock), cost: String(product.cost), price: String(product.price) }) }} onDelete={deleteProduct} /></section>}
       </main>
-      {notice && <div className="toast">{notice} <span>✓</span></div>}
+      {notice && <div className={`toast${noticeError ? ' error' : ''}`}>{notice} <span>{noticeError ? '!' : '✓'}</span></div>}
       {showBackup && <div className="modal-backdrop" onClick={() => setShowBackup(false)}><section className="modal backup-modal" onClick={(e) => e.stopPropagation()}><div className="modal-title"><div><h2>النسخ الاحتياطي والاستعادة</h2><p>احفظ نسخه كاملة من المنتجات والفواتير والعملاء والديون على جهازك.</p></div><button type="button" className="close-button" onClick={() => setShowBackup(false)}><X size={20} /></button></div><div className="backup-actions"><button className="primary-button full" onClick={exportBackup}><Download size={18} /> تنزيل نسخة احتياطية كاملة</button><button className="outline-button full" onClick={() => backupInputRef.current?.click()}><Download size={18} /> استعادة نسخة من الجهاز</button><input ref={backupInputRef} type="file" accept="application/json" onChange={(event) => { importBackup(event); setShowBackup(false) }} hidden /></div><div className="backup-note"><strong>مهم:</strong><span>النسخة تشمل كل بيانات المحل المحفوظة على هذا الجهاز، والاستعادة تستبدل البيانات الحالية بالكامل.</span></div></section></div>}
       {showSupplier && <div className="modal-backdrop" onClick={() => setShowSupplier(false)}><form className="modal" onSubmit={addSupplier} onClick={(e) => e.stopPropagation()}><div className="modal-title"><div><h2>إضافة مورد</h2><p>سجّل بيانات مورد الدهانات</p></div><button type="button" className="close-button" onClick={() => setShowSupplier(false)}><X size={20} /></button></div><label>اسم المورد<input required value={supplierForm.name} onChange={(e) => setSupplierForm({ ...supplierForm, name: e.target.value })} placeholder="مثال: شركة الألوان" /></label><label>رقم الهاتف<input value={supplierForm.phone} onChange={(e) => setSupplierForm({ ...supplierForm, phone: e.target.value })} placeholder="اختياري" /></label><label>الرصيد السابق المستحق للمورد (ج.م)<input type="number" min="0" step="0.01" value={supplierForm.balance} onChange={(e) => setSupplierForm({ ...supplierForm, balance: e.target.value })} placeholder="0.00" /></label><p className="muted-empty">أدخل المبلغ الذي كان مستحقًا للمورد قبل بدء التسجيل هنا.</p><button className="primary-button full" type="submit"><UserRound size={18} /> حفظ المورد</button></form></div>}
       {openingBalanceSupplier && <div className="modal-backdrop" onClick={() => setOpeningBalanceSupplier(null)}><form className="modal" onSubmit={recordSupplierOpeningBalance} onClick={(e) => e.stopPropagation()}><div className="modal-title"><div><h2>إضافة رصيد سابق</h2><p>{openingBalanceSupplier.name} · الرصيد الحالي {openingBalanceSupplier.balance.toLocaleString('ar-EG')} ج.م</p></div><button type="button" className="close-button" onClick={() => setOpeningBalanceSupplier(null)}><X size={20} /></button></div><label>المبلغ المستحق سابقًا (ج.م)<input required autoFocus type="number" min="0.01" step="0.01" value={openingBalanceAmount} onChange={(e) => setOpeningBalanceAmount(e.target.value)} placeholder="0.00" /></label><p className="muted-empty">سيُضاف المبلغ إلى رصيد المورد الحالي، ولن يستبدله.</p><button className="primary-button full" type="submit"><Plus size={18} /> إضافة إلى الرصيد</button></form></div>}
@@ -695,7 +809,7 @@ function updateProductPrices(event: React.FormEvent) {
       {supplierReport && <div className="modal-backdrop" onClick={() => setSupplierReport(null)}><section className="modal invoice-preview supplier-report-modal" onClick={(e) => e.stopPropagation()}><div className="modal-title"><div><h2>تقرير المورد: {supplierReport.name}</h2><p>{supplierReport.phone || 'بدون هاتف'} · تقرير كامل بالتواريخ</p></div><div className="invoice-modal-actions"><button className="text-button" type="button" onClick={() => editSupplier(supplierReport)}>تعديل المورد</button><button className="danger-button" type="button" onClick={() => deleteSupplier(supplierReport)}>حذف المورد</button><button className="outline-button" onClick={() => window.print()}><FileText size={16} /> طباعة التقرير</button><button type="button" className="close-button" onClick={() => setSupplierReport(null)}><X size={20} /></button></div></div><div className="report-detail-block"><h3>تفاصيل المنتجات المشتراة والمدفوعات</h3><div className="table-wrap"><table><thead><tr><th>التاريخ</th><th>المنتج</th><th>الكمية</th><th>الإجمالي</th><th>المدفوع</th></tr></thead><tbody>{purchases.filter((purchase) => purchase.supplier === supplierReport.name).flatMap((purchase) => purchase.items.map((item, index) => <tr key={`${purchase.id}-${item.code}-${index}`}><td>{purchase.date}</td><td>{item.product}</td><td>{item.quantity.toLocaleString('ar-EG')}</td><td>{(item.quantity * item.cost).toLocaleString('ar-EG')} ج.م</td><td>{(purchase.paid * ((item.quantity * item.cost) / (purchase.total || 1))).toLocaleString('ar-EG')} ج.م</td></tr>))}{supplierPayments.filter((payment) => payment.supplier === supplierReport.name).map((payment) => <tr key={payment.id}><td>{payment.date}</td><td>دفعة {payment.note && `— ${payment.note}`}</td><td>—</td><td>—</td><td>{payment.amount.toLocaleString('ar-EG')} ج.م</td></tr>)}</tbody></table></div></div><div className="invoice-summary"><div><span>إجمالي المشتريات</span><strong>{purchases.filter((purchase) => purchase.supplier === supplierReport.name).reduce((sum, purchase) => sum + purchase.total, 0).toLocaleString('ar-EG')} ج.م</strong></div><div><span>إجمالي المدفوع</span><strong>{(purchases.filter((purchase) => purchase.supplier === supplierReport.name).reduce((sum, purchase) => sum + purchase.paid, 0) + supplierPayments.filter((payment) => payment.supplier === supplierReport.name).reduce((sum, payment) => sum + payment.amount, 0)).toLocaleString('ar-EG')} ج.م</strong></div><div><span>الرصيد المتبقي</span><strong>{supplierReport.balance.toLocaleString('ar-EG')} ج.م</strong></div></div><div className="table-wrap"><table><thead><tr><th>التاريخ</th><th>نوع العملية</th><th>البيان</th><th>مدين</th><th>دائن</th><th>الرصيد</th></tr></thead><tbody>{[...purchases.filter((purchase) => purchase.supplier === supplierReport.name).map((purchase) => ({ date: purchase.date, type: 'فاتورة شراء', description: `${purchase.id} — ${purchase.items.map((item) => `${item.product} × ${item.quantity}`).join('، ')}`, debit: purchase.total, credit: purchase.paid })), ...supplierPayments.filter((payment) => payment.supplier === supplierReport.name).map((payment) => ({ date: payment.date, type: 'دفعة', description: payment.note, debit: 0, credit: payment.amount }))].map((entry, index) => <tr key={`${entry.type}-${index}`}><td>{entry.date}</td><td><span className={`badge ${entry.type === 'دفعة' ? 'good' : 'warning'}`}>{entry.type}</span></td><td>{entry.description}</td><td>{entry.debit ? `${entry.debit.toLocaleString('ar-EG')} ج.م` : '—'}</td><td>{entry.credit ? `${entry.credit.toLocaleString('ar-EG')} ج.م` : '—'}</td><td>—</td></tr>)}</tbody></table></div>{!purchases.some((purchase) => purchase.supplier === supplierReport.name) && !supplierPayments.some((payment) => payment.supplier === supplierReport.name) && <div className="empty-state">لا توجد تعاملات مسجلة لهذا المورد.</div>}</section></div>}
       {selectedSupplier && <div className="modal-backdrop" onClick={() => setSelectedSupplier(null)}><form className="modal" onSubmit={paySupplier} onClick={(e) => e.stopPropagation()}><div className="modal-title"><div><h2>دفعة للمورد</h2><p>{selectedSupplier.name} — المتبقي {selectedSupplier.balance.toLocaleString('ar-EG')} ج.م</p></div><button type="button" className="close-button" onClick={() => setSelectedSupplier(null)}><X size={20} /></button></div><label>قيمة الدفعة<input required autoFocus type="number" min="0.01" step="0.01" value={supplierPayment} onChange={(e) => setSupplierPayment(e.target.value)} /></label><button className="primary-button full" type="submit"><WalletCards size={18} /> تسجيل الدفعة</button></form></div>}
       {showCustomer && <div className="modal-backdrop" onClick={() => setShowCustomer(false)}><form className="modal" onSubmit={addCustomer} onClick={(e) => e.stopPropagation()}><div className="modal-title"><div><h2>إضافة حساب جديد</h2><p>أضف بيانات العميل أو الصنايعي</p></div><button type="button" className="close-button" onClick={() => setShowCustomer(false)}><X size={20} /></button></div><label>الاسم<input required value={customerForm.name} onChange={(e) => setCustomerForm({ ...customerForm, name: e.target.value })} placeholder="مثال: محمد النقاش" /></label><div className="form-row"><label>رقم الهاتف<input value={customerForm.phone} onChange={(e) => setCustomerForm({ ...customerForm, phone: e.target.value })} placeholder="اختياري" /></label><label>نوع الحساب<select value={customerForm.kind} onChange={(e) => setCustomerForm({ ...customerForm, kind: e.target.value as 'عميل' | 'صنايعي' })}><option>عميل</option><option>صنايعي</option></select></label></div><button className="primary-button full" type="submit"><UserRound size={18} /> حفظ الحساب</button></form></div>}
-      {selectedCustomer && <div className="modal-backdrop" onClick={() => setSelectedCustomer(null)}><section className="modal invoice-preview customer-statement" onClick={(e) => e.stopPropagation()}><div className="modal-title"><div><h2>كشف حساب: {selectedCustomer.name}</h2><p>{selectedCustomer.kind || 'عميل'} · {selectedCustomer.phone || 'بدون هاتف'}</p></div><div className="invoice-modal-actions"><button className="text-button" type="button" onClick={() => editCustomer(selectedCustomer)}>تعديل الحساب</button><button className="danger-button" type="button" onClick={() => deleteCustomer(selectedCustomer)}>حذف الحساب</button><button className="outline-button" onClick={() => printCustomerStatement(selectedCustomer)}><FileText size={16} /> طباعة الكشف</button><button type="button" className="close-button" onClick={() => setSelectedCustomer(null)}><X size={20} /></button></div></div><div className="invoice-summary"><div><span>إجمالي المشتريات</span><strong>{sales.filter((sale) => sale.customer === selectedCustomer.name).reduce((sum, sale) => sum + sale.total, 0).toLocaleString('ar-EG')} ج.م</strong></div><div><span>المدفوع</span><strong>{sales.filter((sale) => sale.customer === selectedCustomer.name).reduce((sum, sale) => sum + sale.paid, 0).toLocaleString('ar-EG')} ج.م</strong></div><div><span>المتبقي</span><strong>{selectedCustomer.balance.toLocaleString('ar-EG')} ج.م</strong></div></div><div className="report-detail-block"><h3>المنتجات المباعة</h3><div className="table-wrap"><table><thead><tr><th>التاريخ</th><th>المنتج</th><th>الكمية</th><th>الإجمالي</th></tr></thead><tbody>{sales.filter((sale) => sale.customer === selectedCustomer.name).flatMap((sale) => sale.items.map((item) => <tr key={`${sale.id}-${item.code}`}><td>{sale.date}</td><td>{item.product}</td><td>{item.quantity.toLocaleString('ar-EG')}</td><td>{item.total.toLocaleString('ar-EG')} ج.م</td></tr>))}</tbody></table></div></div>{customerPayments.some((payment) => payment.customer === selectedCustomer.name) && <div className="report-detail-block"><h3>الدفعات المسجلة</h3><div className="table-wrap"><table><thead><tr><th>التاريخ</th><th>نوع الحركة</th><th>ملاحظات</th><th>المبلغ</th></tr></thead><tbody>{customerPayments.filter((payment) => payment.customer === selectedCustomer.name).map((payment) => <tr key={payment.id}><td>{payment.date}</td><td>{payment.type}</td><td>{payment.note || '—'}</td><td>{payment.amount.toLocaleString('ar-EG')} ج.م</td></tr>)}</tbody></table></div></div>}<form className="payment-form" onSubmit={addCustomerPayment}><div className="form-row"><label>نوع الحركة<select value={customerPayment.type} onChange={(e) => setCustomerPayment({ ...customerPayment, type: e.target.value as 'دفعة' | 'سُلفة' })}><option>دفعة</option><option>سُلفة</option></select></label><label>المبلغ<input required type="number" min="1" value={customerPayment.amount} onChange={(e) => setCustomerPayment({ ...customerPayment, amount: e.target.value })} /></label></div><label>ملاحظات<input value={customerPayment.note} onChange={(e) => setCustomerPayment({ ...customerPayment, note: e.target.value })} placeholder="مثال: دفعة نقدية" /></label><button className="primary-button full" type="submit"><WalletCards size={17} /> تسجيل الحركة</button></form><div className="statement-list">{[...sales.filter((sale) => sale.customer === selectedCustomer.name).map((sale) => ({ date: sale.date, text: `فاتورة ${sale.id}`, amount: sale.total, type: 'فاتورة' })), ...customerPayments.filter((payment) => payment.customer === selectedCustomer.name).map((payment) => ({ date: payment.date, text: payment.note || payment.type, amount: payment.amount, type: payment.type }))].map((entry, index) => <div className="statement-row" key={`${entry.text}-${index}`}><span>{entry.date}</span><strong>{entry.text}</strong><b>{entry.amount.toLocaleString('ar-EG')} ج.م</b></div>)}</div></section></div>}
+      {selectedCustomer && <div className="modal-backdrop" onClick={() => setSelectedCustomer(null)}><section className="modal invoice-preview customer-statement" onClick={(e) => e.stopPropagation()}><div className="modal-title"><div><h2>كشف حساب: {selectedCustomer.name}</h2><p>{selectedCustomer.kind || 'عميل'} · {selectedCustomer.phone || 'بدون هاتف'}</p></div><div className="invoice-modal-actions"><button className="text-button" type="button" onClick={() => editCustomer(selectedCustomer)}>تعديل الحساب</button><button className="danger-button" type="button" onClick={() => deleteCustomer(selectedCustomer)}>حذف الحساب</button><button className="outline-button" onClick={() => printCustomerStatement(selectedCustomer)}><FileText size={16} /> طباعة الكشف</button><button type="button" className="close-button" onClick={() => setSelectedCustomer(null)}><X size={20} /></button></div></div><div className="invoice-summary"><div><span>إجمالي المشتريات</span><strong>{sales.filter((sale) => sale.customer === selectedCustomer.name).reduce((sum, sale) => sum + sale.total, 0).toLocaleString('ar-EG')} ج.م</strong></div><div><span>المدفوع</span><strong>{sales.filter((sale) => sale.customer === selectedCustomer.name).reduce((sum, sale) => sum + sale.paid, 0).toLocaleString('ar-EG')} ج.م</strong></div><div><span>{selectedCustomer.balance < 0 ? 'رصيد دائن للعميل' : 'المتبقي'}</span><strong>{Math.abs(selectedCustomer.balance).toLocaleString('ar-EG')} ج.م</strong></div></div><div className="report-detail-block"><h3>المنتجات المباعة</h3><div className="table-wrap"><table><thead><tr><th>التاريخ</th><th>المنتج</th><th>الكمية</th><th>الإجمالي</th></tr></thead><tbody>{sales.filter((sale) => sale.customer === selectedCustomer.name).flatMap((sale) => sale.items.map((item) => <tr key={`${sale.id}-${item.code}`}><td>{sale.date}</td><td>{item.product}</td><td>{item.quantity.toLocaleString('ar-EG')}</td><td>{item.total.toLocaleString('ar-EG')} ج.م</td></tr>))}</tbody></table></div></div>{customerPayments.some((payment) => payment.customer === selectedCustomer.name) && <div className="report-detail-block"><h3>الدفعات المسجلة</h3><div className="table-wrap"><table><thead><tr><th>التاريخ</th><th>نوع الحركة</th><th>ملاحظات</th><th>المبلغ</th></tr></thead><tbody>{customerPayments.filter((payment) => payment.customer === selectedCustomer.name).map((payment) => <tr key={payment.id}><td>{payment.date}</td><td>{payment.type}</td><td>{payment.note || '—'}</td><td>{payment.amount.toLocaleString('ar-EG')} ج.م</td></tr>)}</tbody></table></div></div>}<form className="payment-form" onSubmit={addCustomerPayment}><div className="form-row"><label>نوع الحركة<select value={customerPayment.type} onChange={(e) => setCustomerPayment({ ...customerPayment, type: e.target.value as 'دفعة' | 'سُلفة' })}><option>دفعة</option><option>سُلفة</option></select></label><label>المبلغ<input required type="number" min="1" value={customerPayment.amount} onChange={(e) => setCustomerPayment({ ...customerPayment, amount: e.target.value })} /></label></div><label>ملاحظات<input value={customerPayment.note} onChange={(e) => setCustomerPayment({ ...customerPayment, note: e.target.value })} placeholder="مثال: دفعة نقدية" /></label><button className="primary-button full" type="submit"><WalletCards size={17} /> تسجيل الحركة</button></form><div className="statement-list">{[...sales.filter((sale) => sale.customer === selectedCustomer.name).map((sale) => ({ date: sale.date, text: `فاتورة ${sale.id}`, amount: sale.total, type: 'فاتورة' })), ...customerPayments.filter((payment) => payment.customer === selectedCustomer.name).map((payment) => ({ date: payment.date, text: payment.note || payment.type, amount: payment.amount, type: payment.type }))].map((entry, index) => <div className="statement-row" key={`${entry.text}-${index}`}><span>{entry.date}</span><strong>{entry.text}</strong><b>{entry.type === 'دفعة' ? '-' : '+'}{entry.amount.toLocaleString('ar-EG')} ج.م</b></div>)}</div></section></div>}
       {editingPurchase && <div className="modal-backdrop" onClick={() => setEditingPurchase(null)}><form className="modal invoice-edit-modal" onSubmit={saveEditedPurchase} onClick={(e) => e.stopPropagation()}><div className="modal-title"><div><h2>تعديل فاتورة الشراء</h2><p>{editingPurchase.id} · عدّل الكميات والأسعار ثم احفظ التغييرات</p></div><button type="button" className="close-button" onClick={() => setEditingPurchase(null)}><X size={20} /></button></div><label>المبلغ المدفوع<input type="number" min="0" step="0.01" value={editingPurchase.paid} onChange={(e) => setEditingPurchase({ ...editingPurchase, paid: Number(e.target.value) })} /></label><div className="sale-cart"><div className="panel-header"><div><h3>أصناف الفاتورة</h3><p>عدّل الكمية أو الأسعار، ويمكنك حذف الصنف</p></div></div>{editingPurchase.items.map((item, index) => <div className="cart-row" key={`${item.code}-${index}`}><span>{item.product}<small>{item.code}</small></span><div className="form-row compact-fields"><label>الكمية<input type="number" min="1" value={item.quantity} onChange={(e) => setEditingPurchase({ ...editingPurchase, items: editingPurchase.items.map((line, itemIndex) => itemIndex === index ? { ...line, quantity: Number(e.target.value) } : line) })} /></label><label>سعر الشراء<input type="number" min="0.01" step="0.01" value={item.cost} onChange={(e) => setEditingPurchase({ ...editingPurchase, items: editingPurchase.items.map((line, itemIndex) => itemIndex === index ? { ...line, cost: Number(e.target.value) } : line) })} /></label><label>سعر البيع<input type="number" min="0.01" step="0.01" value={item.salePrice} onChange={(e) => setEditingPurchase({ ...editingPurchase, items: editingPurchase.items.map((line, itemIndex) => itemIndex === index ? { ...line, salePrice: Number(e.target.value) } : line) })} /></label><button type="button" className="danger-button" onClick={() => setEditingPurchase({ ...editingPurchase, items: editingPurchase.items.filter((_, itemIndex) => itemIndex !== index) })}>حذف</button></div></div>)}</div><div className="price-preview">إجمالي الفاتورة بعد التعديل: <strong>{editingPurchase.items.reduce((sum, item) => sum + item.quantity * item.cost, 0).toLocaleString('ar-EG')} ج.م</strong></div><button className="primary-button full" type="submit">حفظ تعديل الفاتورة</button></form></div>}
       {editingProduct && <div className="modal-backdrop" onClick={() => setEditingProduct(null)}><form className="modal" onSubmit={updateProductPrices} onClick={(e) => e.stopPropagation()}><div className="modal-title"><div><h2>تعديل بيانات المنتج</h2><p>{editingProduct.name} · المخزون الحالي {editingProduct.stock} عبوة</p></div><button type="button" className="close-button" onClick={() => setEditingProduct(null)}><X size={20} /></button></div><label>اسم المنتج<input required maxLength={120} value={editProductForm.name} onChange={(e) => setEditProductForm({ ...editProductForm, name: e.target.value })} /></label><label>الكمية في المخزون<input required type="number" min="0" step="1" value={editProductForm.stock} onChange={(e) => setEditProductForm({ ...editProductForm, stock: e.target.value })} /></label><label>سعر الشراء<input required type="number" min="0" step="0.01" value={editProductForm.cost} onChange={(e) => setEditProductForm({ ...editProductForm, cost: e.target.value })} /></label><label>سعر البيع<input required type="number" min="0.01" step="0.01" value={editProductForm.price} onChange={(e) => setEditProductForm({ ...editProductForm, price: e.target.value })} /></label><div className="price-preview">ربح الوحدة بعد التعديل: <strong>{(Number(editProductForm.price || 0) - Number(editProductForm.cost || 0)).toLocaleString('ar-EG')} ج.م</strong></div><button className="primary-button full" type="submit">حفظ التعديل</button></form></div>}
       {showAdd && <div className="modal-backdrop" onClick={() => setShowAdd(false)}><form className="modal" onSubmit={addProduct} onClick={(e) => e.stopPropagation()}><div className="modal-title"><div><h2>إضافة منتج جديد</h2><p>أضف تفاصيل المنتج للمخزون</p></div><button type="button" className="close-button" onClick={() => setShowAdd(false)}><X size={20} /></button></div><label>اسم المنتج<input required value={newProduct.name} onChange={(e) => setNewProduct({ ...newProduct, name: e.target.value })} placeholder="مثال: دهان بلاستيك أبيض" /></label><div className="form-row"><label>كود المنتج<input value={newProduct.code} onChange={(e) => setNewProduct({ ...newProduct, code: e.target.value })} placeholder="PL-0000" /></label><label>التصنيف<select required value={newProduct.category} onChange={(e) => setNewProduct({ ...newProduct, category: e.target.value })}><option value="">اختر التصنيف</option>{productCategories.map((category) => <option key={category} value={category}>{category}</option>)}</select></label></div><div className="form-row"><label>الكمية<input required type="number" min="0" value={newProduct.stock} onChange={(e) => setNewProduct({ ...newProduct, stock: e.target.value })} placeholder="0" /></label><label>سعر الشراء<input required type="number" min="0" step="0.01" inputMode="decimal" value={newProduct.cost} onChange={(e) => setNewProduct({ ...newProduct, cost: e.target.value })} placeholder="0.00" /></label></div><label>سعر البيع<input required type="number" min="0" step="0.01" inputMode="decimal" value={newProduct.price} onChange={(e) => setNewProduct({ ...newProduct, price: e.target.value })} placeholder="0.00" /></label><button className="primary-button full" type="submit"><PackagePlus size={18} /> حفظ المنتج</button></form></div>}
