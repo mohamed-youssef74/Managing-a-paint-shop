@@ -219,7 +219,7 @@ export default function Page() {
     const lastPayment = payments.length ? payments.reduce((a, b) => (b.date > a.date ? b : a)) : null
     const firstInvoice = invoices.length ? invoices.reduce((a, b) => (b.date < a.date ? b : a)) : null
     const paidTotal = sales.filter((sale) => sale.customer === customer.name).reduce((sum, sale) => sum + sale.paid, 0)
-    const neverPaid = paidTotal === 0 && !customerPayments.some((payment) => payment.customer === customer.name && payment.type !== 'تصحيح')
+    const neverPaid = paidTotal === 0 && !customerPayments.some((payment) => payment.customer === customer.name && payment.type === 'دفعة')
     const kind: 'known' | 'noPayment' | 'noRecords' = lastPayment ? 'known' : firstInvoice ? 'noPayment' : 'noRecords'
     const days = lastPayment ? daysSince(lastPayment.date) : firstInvoice ? daysSince(firstInvoice.date) : null
     return { customer, kind, days, neverPaid, lastPaymentRaw: lastPayment?.raw ?? '', firstInvoiceRaw: firstInvoice?.raw ?? '', overdue: kind === 'known' && days !== null && days >= 30 }
